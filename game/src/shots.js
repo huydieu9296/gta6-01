@@ -1,79 +1,101 @@
-// The screenshot scenes behind ?shot=start|play|end. Each one plays the real rules forward from a
-// fresh world for a fixed number of steps, steered by a simple autopilot (look ahead each way the
-// paddle could move, keep clear of blocks, chase the lowest coin when that is safe), so the frame
-// is what a short game really looks like and the same seed always gives the same frame.
-import { FIELD, PLAYER, STEP } from './config.js';
-import { EVENT_OVER, KIND_BLOCK } from './world.js';
-import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+// Screenshot scenes behind ?shot=chase|street|mission|police. Each poses the real game
+// (player, traffic, police, mission marker, time of day, weather) so the frame is what
+// the game genuinely looks like, and the same seed always gives the same frame.
+// stageShot sets the scene up; shotCamera frames it AFTER the settle steps, from the
+// live car position — the camera sits ahead of the car, looking back, so the car, the
+// road ahead and anything chasing it are all in frame. All shot cars drive on real
+// streets (streets run at x/z = ±22, ±66, ±110, ±154); a car placed inside a block
+// would crash into buildings and stop.
 
-const START_SECONDS = 5;
-const PLAY_SECONDS = 26;
-const END_LIMIT_SECONDS = 600;
-/**
- * How far ahead, in seconds, the autopilot checks each way it could move: the play scene's pilot
- * looks well ahead and keeps all its lives; the end scene's looks only a moment ahead, so it is
- * caught out once the blocks speed up, as a hurried player is.
- */
-const HORIZON_PLAY = 0.7;
-const HORIZON_END = 0.25;
-const SAMPLE = 1 / 30;
-const DIRECTIONS = [0, -1, 1];
-/** Extra room, each side, it keeps between the paddle and a block. */
-const MARGIN = 10;
+export const SHOT_NAMES = ['chase', 'street', 'mission', 'police'];
 
-/** Seconds until moving in `direction` (-1, 0, 1) runs the paddle into a block; Infinity when it never does. */
-function timeToHit(state, direction, horizon) {
-  const player = state.player;
-  for (let t = SAMPLE; t <= horizon; t += SAMPLE) {
-    const x = Math.min(FIELD.width - player.width, Math.max(0, player.x + direction * PLAYER.speed * t));
-    for (let index = 0; index < state.items.length; index += 1) {
-      const item = state.items[index];
-      if (!item.active || item.kind !== KIND_BLOCK) continue;
-      const y = item.y + item.speed * t;
-      if (y + item.height > player.y && y < player.y + player.height && item.x < x + player.width + MARGIN && item.x + item.width > x - MARGIN) return t;
-    }
-  }
-  return Infinity;
+function carOnStreet(world, x, z, yaw, speed) {
+  const car = world.vehicles.parked[0];
+  const i = world.vehicles.parked.indexOf(car);
+  if (i >= 0) world.vehicles.parked.splice(i, 1);
+  car.mesh.position.set(x, 0, z);
+  car.yaw = yaw;
+  car.speed = speed;
+  world.enterCar(car);
+  return car;
 }
 
-/** Of the safe ways to move, the one toward the lowest coin (or the centre); else the one that is hit last. */
-function autopilot(state, horizon) {
-  const player = state.player;
-  let coin = null;
-  for (let index = 0; index < state.items.length; index += 1) {
-    const item = state.items[index];
-    if (item.active && item.kind !== KIND_BLOCK && (coin === null || item.y > coin.y)) coin = item;
+export function stageShot(world, name, seed) {
+  const { player, vehicles, police, missions } = world;
+  const st = player.state;
+  if (name === 'chase') {
+    // Golden-hour getaway: Rook in a sports car eastbound on -22nd, Solmar PD closing in.
+    world.setTimeOfDay(17.0);
+    world.setWeather(false);
+    const car = world.vehicles.parked.find((c) => c.sports) || world.vehicles.parked[0];
+    const i = world.vehicles.parked.indexOf(car);
+    if (i >= 0) world.vehicles.parked.splice(i, 1);
+    car.mesh.position.set(-66, 0, -22);
+    car.yaw = Math.PI / 2; // heading +x along the street
+    car.speed = 24;
+    world.enterCar(car);
+    police.setHeat(55);
+    police.step(0.01, -66, -22, true, 24);
+    police.step(0.01, -66, -22, true, 24);
+    st.camYaw = Math.PI / 2;
+    return;
   }
-  const target = coin === null ? FIELD.width / 2 : coin.x + coin.width / 2;
-  const centre = player.x + player.width / 2;
-  const wanted = target > centre + 8 ? 1 : target < centre - 8 ? -1 : 0;
-  let best = wanted;
-  let bestTime = timeToHit(state, wanted, horizon);
-  for (let index = 0; index < DIRECTIONS.length && bestTime !== Infinity; index += 1) {
-    const time = timeToHit(state, DIRECTIONS[index], horizon);
-    if (time > bestTime) {
-      bestTime = time;
-      best = DIRECTIONS[index];
-    }
+  if (name === 'street') {
+    // Midday on foot at a busy intersection: traffic, pedestrians, sun.
+    world.setTimeOfDay(12.0);
+    world.setWeather(false);
+    player.reset(-22, 22, 100, 24);
+    st.camYaw = Math.PI * 0.75;
+    st.yaw = Math.PI * 0.75;
+    return;
   }
-  return best;
+  if (name === 'mission') {
+    // Dusk courier run: Rook picks up Mara's package at the port gate (132,154 —
+    // on the street, 4 units from the pickup, so the run starts the moment the
+    // scene settles) and drives west down 154th to the drop-off.
+    world.setTimeOfDay(18.6);
+    world.setWeather(false);
+    carOnStreet(world, 132, 154, -Math.PI / 2, 18); // heading -x along the street
+    missions.startStory(0);
+    st.camYaw = -Math.PI / 2;
+    return;
+  }
+  // police: night roadblock in the rain — wanted level four, no way through.
+  world.setTimeOfDay(21.5);
+  world.setWeather(true);
+  carOnStreet(world, -66, 22, Math.PI / 2, 14); // heading +x along the street
+  police.setHeat(78);
+  police.step(0.01, -66, 22, true, 14);
+  police.step(0.01, -66, 22, true, 14);
+  st.camYaw = Math.PI / 2;
 }
 
-/**
- * Set `world` to the named scene (start, play or end; any other name is start) and return the
- * screen to draw over it and the best score to show.
- */
-export function stageShot(name, world) {
-  world.reset();
-  if (name !== 'play' && name !== 'end') {
-    for (let index = 0; index < START_SECONDS / STEP; index += 1) world.step(STEP, 0, true);
-    return { screen: SCREEN_TITLE, best: 0 };
+// Camera for the shot, from the live game state after the settle steps.
+export function shotCamera(world, name) {
+  const { player } = world;
+  const st = player.state;
+  if (name === 'street') {
+    return { pos: [-44, 9, 44], look: [-14, 1, 14] };
   }
-  const limit = name === 'end' ? END_LIMIT_SECONDS : PLAY_SECONDS;
-  const horizon = name === 'end' ? HORIZON_END : HORIZON_PLAY;
-  for (let index = 0; index < limit / STEP; index += 1) {
-    if (world.step(STEP, autopilot(world.state, horizon), false) & EVENT_OVER) break;
+  // Driving shots: camera ahead of the car, high enough that traffic ahead of the
+  // player cannot fill the frame, looking back at it.
+  const car = world.player.state.inCar;
+  if (car) {
+    const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
+    const cx = car.mesh.position.x, cz = car.mesh.position.z;
+    return {
+      pos: [cx + fx * 38, 15, cz + fz * 38],
+      look: [cx + fx * 6, 1.5, cz + fz * 6],
+    };
   }
-  const over = world.state.lives === 0;
-  return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score };
+  return { pos: [st.x - 20, 9, st.z - 20], look: [st.x, 1.5, st.z] };
+}
+
+export function shotInfo(name) {
+  return {
+    chase: 'Golden-hour chase — Rook in a sports car, Solmar PD closing in.',
+    street: 'Midday on foot in downtown Solmar — traffic, pedestrians, sun.',
+    mission: 'Dusk courier run for Mara — beacon lit, drop-off ahead.',
+    police: 'Night roadblock in the rain — wanted level four, no way through.',
+  }[name] || 'Solmar Heat';
 }

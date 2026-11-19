@@ -1,53 +1,81 @@
-// Keyboard and pointer input. Held keys give a steering direction; one-shot presses (start or
-// restart, pause) are queued as bit flags and taken once by the loop, so a press between two
-// frames is never lost and never counted twice.
+// Keyboard + mouse input for Solmar Heat. Held keys are read every frame; one-shot
+// presses (interact, shoot, reload, phone, pause) are queued as flags and taken once.
+export const ACT = {
+  INTERACT: 1, // E
+  SHOOT: 2, // F or mouse click
+  RELOAD: 4, // R
+  PHONE: 8, // M
+  PAUSE: 16, // P or Escape
+  HORN: 32, // H
+};
 
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
+const KEYMAP = {
+  KeyW: 'up', ArrowUp: 'up',
+  KeyS: 'down', ArrowDown: 'down',
+  KeyA: 'left', ArrowLeft: 'left',
+  KeyD: 'right', ArrowRight: 'right',
+  ShiftLeft: 'run', ShiftRight: 'run',
+  Space: 'jump',
+  KeyE: 'interact',
+  KeyF: 'shoot',
+  KeyR: 'reload',
+  KeyM: 'phone',
+  KeyP: 'pause', Escape: 'pause',
+  KeyH: 'horn',
+};
 
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const CONFIRM = new Set(['Space', 'Enter']);
-const PAUSE = new Set(['KeyP', 'Escape']);
-
-export function createInput(target) {
-  let left = false;
-  let right = false;
+export function createInput(canvas) {
+  const held = { up: false, down: false, left: false, right: false, run: false, jump: false };
   let actions = 0;
+  // Mouse-drag camera orbit: accumulated deltas, consumed by the camera each frame.
+  let dragX = 0, dragY = 0, dragging = false, lastX = 0, lastY = 0;
+  // A click only counts as a shot when the pointer barely moved: ending a camera
+  // drag must not fire the shotgun.
+  let downX = 0, downY = 0, moved = 0;
 
-  window.addEventListener('keydown', (event) => {
-    if (LEFT.has(event.code)) left = true;
-    else if (RIGHT.has(event.code)) right = true;
-    else if (CONFIRM.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_CONFIRM;
-    } else if (PAUSE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PAUSE;
-    } else return;
-    event.preventDefault();
+  window.addEventListener('keydown', (e) => {
+    const name = KEYMAP[e.code];
+    if (!name) return;
+    if (name === 'interact' && !e.repeat) actions |= ACT.INTERACT;
+    else if (name === 'shoot' && !e.repeat) actions |= ACT.SHOOT;
+    else if (name === 'reload' && !e.repeat) actions |= ACT.RELOAD;
+    else if (name === 'phone' && !e.repeat) actions |= ACT.PHONE;
+    else if (name === 'pause' && !e.repeat) actions |= ACT.PAUSE;
+    else if (name === 'horn' && !e.repeat) actions |= ACT.HORN;
+    else if (held[name] !== undefined) held[name] = true;
+    if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
   });
-  window.addEventListener('keyup', (event) => {
-    if (LEFT.has(event.code)) left = false;
-    else if (RIGHT.has(event.code)) right = false;
+  window.addEventListener('keyup', (e) => {
+    const name = KEYMAP[e.code];
+    if (name && held[name] !== undefined) held[name] = false;
   });
-  // A key released while the tab is hidden never sends keyup: let go of everything on blur.
   window.addEventListener('blur', () => {
-    left = false;
-    right = false;
+    for (const k of Object.keys(held)) held[k] = false;
+    dragging = false;
   });
-  target.addEventListener('pointerdown', () => {
-    actions |= ACTION_CONFIRM;
+  canvas.addEventListener('pointerdown', (e) => {
+    dragging = true; lastX = e.clientX; lastY = e.clientY;
+    downX = e.clientX; downY = e.clientY; moved = 0;
   });
+  window.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    dragX += e.clientX - lastX; dragY += e.clientY - lastY;
+    moved = Math.max(moved, Math.hypot(e.clientX - downX, e.clientY - downY));
+    lastX = e.clientX; lastY = e.clientY;
+  });
+  window.addEventListener('pointerup', () => { dragging = false; });
+  canvas.addEventListener('click', () => { if (moved < 8) actions |= ACT.SHOOT; });
 
   return {
-    /** -1 for left, 1 for right, 0 for neither or both. */
-    direction() {
-      return (right ? 1 : 0) - (left ? 1 : 0);
-    },
-    /** The one-shot presses since the last call, as ACTION_* flags. */
-    takeActions() {
-      const taken = actions;
-      actions = 0;
-      return taken;
+    held,
+    takeActions() { const a = actions; actions = 0; return a; },
+    takeDrag() { const d = { x: dragX, y: dragY }; dragX = 0; dragY = 0; return d; },
+    // -1..1 steering / throttle axes for driving and walking.
+    axes() {
+      return {
+        fwd: (held.up ? 1 : 0) - (held.down ? 1 : 0),
+        strafe: (held.right ? 1 : 0) - (held.left ? 1 : 0),
+      };
     },
   };
 }
