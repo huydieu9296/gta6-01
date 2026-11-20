@@ -1,36 +1,51 @@
-// Seeded RNG (mulberry32) so city layout and screenshot poses are reproducible.
+// Solmar Heat — seeded random numbers (mulberry32), so a screenshot seed
+// always builds the same city, the same traffic and the same pedestrians.
 export function mulberry32(seed) {
   let a = seed >>> 0;
-  return function () {
-    a |= 0; a = (a + 0x6d2b79f5) | 0;
+  return function next() {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
 
-export function makeRng(seed) {
-  const rand = mulberry32(seed);
-  return {
-    next: rand,
-    range: (lo, hi) => lo + rand() * (hi - lo),
-    int: (lo, hi) => lo + Math.floor(rand() * (hi - lo + 1)),
-    pick: (arr) => arr[Math.floor(rand() * arr.length)],
-    chance: (p) => rand() < p,
-  };
+/** Turn any short string into a stable 32-bit seed. */
+export function seedFromString(text) {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
 }
 
-export function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
-export function lerp(a, b, t) { return a + (b - a) * t; }
-export function damp(a, b, lambda, dt) { return lerp(a, b, 1 - Math.exp(-lambda * dt)); }
-// Shortest signed angle difference, in radians.
-export function angleDiff(a, b) {
-  let d = (b - a) % (Math.PI * 2);
-  if (d > Math.PI) d -= Math.PI * 2;
-  if (d < -Math.PI) d += Math.PI * 2;
-  return d;
+export function range(rng, min, max) {
+  return min + rng() * (max - min);
 }
-export function dist2(ax, az, bx, bz) {
-  const dx = ax - bx, dz = az - bz;
-  return dx * dx + dz * dz;
+
+export function intRange(rng, min, max) {
+  return Math.floor(range(rng, min, max + 1));
+}
+
+export function pick(rng, list) {
+  if (!list.length) return undefined;
+  return list[Math.floor(rng() * list.length)];
+}
+
+export function chance(rng, p) {
+  return rng() < p;
+}
+
+/** Fisher–Yates shuffle of a copy. */
+export function shuffled(rng, list) {
+  const out = list.slice();
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = out[i];
+    out[i] = out[j];
+    out[j] = tmp;
+  }
+  return out;
 }

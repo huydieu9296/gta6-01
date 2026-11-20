@@ -1,101 +1,77 @@
-// Screenshot scenes behind ?shot=chase|street|mission|police. Each poses the real game
-// (player, traffic, police, mission marker, time of day, weather) so the frame is what
-// the game genuinely looks like, and the same seed always gives the same frame.
-// stageShot sets the scene up; shotCamera frames it AFTER the settle steps, from the
-// live car position — the camera sits ahead of the car, looking back, so the car, the
-// road ahead and anything chasing it are all in frame. All shot cars drive on real
-// streets (streets run at x/z = ±22, ±66, ±110, ±154); a car placed inside a block
-// would crash into buildings and stop.
+// Solmar Heat — screenshot scenes behind ?shot=chase|street|mission|police.
+// Each scene resets the world from the seed, poses Rook, cars and police
+// where the shot needs them, then plays the real systems forward a fixed
+// number of steps, so the frame is a genuine moment of the game and the same
+// seed always gives the same frame.
+const STEP = 1 / 30;
 
-export const SHOT_NAMES = ['chase', 'street', 'mission', 'police'];
+export function stageShot(name, game) {
+  game.resetWorld(7);
+  game.shotMode = true;
+  const s = game.state;
+  const p = game.player;
 
-function carOnStreet(world, x, z, yaw, speed) {
-  const car = world.vehicles.parked[0];
-  const i = world.vehicles.parked.indexOf(car);
-  if (i >= 0) world.vehicles.parked.splice(i, 1);
-  car.mesh.position.set(x, 0, z);
-  car.yaw = yaw;
-  car.speed = speed;
-  world.enterCar(car);
-  return car;
-}
-
-export function stageShot(world, name, seed) {
-  const { player, vehicles, police, missions } = world;
-  const st = player.state;
   if (name === 'chase') {
-    // Golden-hour getaway: Rook in a sports car eastbound on -22nd, Solmar PD closing in.
-    world.setTimeOfDay(17.0);
-    world.setWeather(false);
-    const car = world.vehicles.parked.find((c) => c.sports) || world.vehicles.parked[0];
-    const i = world.vehicles.parked.indexOf(car);
-    if (i >= 0) world.vehicles.parked.splice(i, 1);
-    car.mesh.position.set(-66, 0, -22);
-    car.yaw = Math.PI / 2; // heading +x along the street
-    car.speed = 24;
-    world.enterCar(car);
-    police.setHeat(55);
-    police.step(0.01, -66, -22, true, 24);
-    police.step(0.01, -66, -22, true, 24);
-    st.camYaw = Math.PI / 2;
-    return;
+    s.hour = 14;
+    s.weather = 'clear';
+    // Rook in a sports car tearing down the main avenue, two police cars behind
+    const car = game.spawnPlayerCar('sports', -28, -40, Math.PI);
+    game.enterCar(car, false);
+    car.speed = 30;
+    game.spawnTrafficNear(3, 60);
+    for (let i = 0; i < 45; i += 1) game.update(STEP, { forward: true });
+    // heat only NOW: during the drive updatePolice would have spawned random
+    // pursuit cars and then trimmed the array from the end — removing the two
+    // staged cars. Setting it here keeps the staged pair and adds one more.
+    s.heat = 55; // three stars
+    game.spawnPoliceBehind(2, 8, 20);
+    for (let i = 0; i < 6; i += 1) game.update(STEP, {});
+    // camera ahead of the car, looking back at it — the police cars behind
+    // Rook stay in frame, so the shot reads as a chase
+    game.setShotCamera(
+      { x: p.pos.x + 7, y: 4.5, z: p.pos.z - 20 },
+      { x: p.pos.x, y: 1.5, z: p.pos.z + 10 },
+    );
+    return { scene: 'chase' };
   }
-  if (name === 'street') {
-    // Midday on foot at a busy intersection: traffic, pedestrians, sun.
-    world.setTimeOfDay(12.0);
-    world.setWeather(false);
-    player.reset(-22, 22, 100, 24);
-    st.camYaw = Math.PI * 0.75;
-    st.yaw = Math.PI * 0.75;
-    return;
-  }
+
   if (name === 'mission') {
-    // Dusk courier run: Rook picks up Mara's package at the port gate (132,154 —
-    // on the street, 4 units from the pickup, so the run starts the moment the
-    // scene settles) and drives west down 154th to the drop-off.
-    world.setTimeOfDay(18.6);
-    world.setWeather(false);
-    carOnStreet(world, 132, 154, -Math.PI / 2, 18); // heading -x along the street
-    missions.startStory(0);
-    st.camYaw = -Math.PI / 2;
-    return;
+    s.hour = 18.4;
+    s.weather = 'clear';
+    // Rook on foot at a courier pickup, beacon lit, a taxi waiting nearby
+    const marker = game.startSideCourier();
+    game.placePlayerAt(marker.pickup.x + 3, marker.pickup.z + 4, 0.4);
+    game.spawnTaxiNear(marker.pickup, 8);
+    game.spawnTrafficNear(2, 40);
+    for (let i = 0; i < 30; i += 1) game.update(STEP, {});
+    game.setShotCamera(
+      { x: marker.pickup.x - 10, y: 6, z: marker.pickup.z - 12 },
+      { x: marker.pickup.x, y: 1.5, z: marker.pickup.z },
+    );
+    return { scene: 'mission' };
   }
-  // police: night roadblock in the rain — wanted level four, no way through.
-  world.setTimeOfDay(21.5);
-  world.setWeather(true);
-  carOnStreet(world, -66, 22, Math.PI / 2, 14); // heading +x along the street
-  police.setHeat(78);
-  police.step(0.01, -66, 22, true, 14);
-  police.step(0.01, -66, 22, true, 14);
-  st.camYaw = Math.PI / 2;
-}
 
-// Camera for the shot, from the live game state after the settle steps.
-export function shotCamera(world, name) {
-  const { player } = world;
-  const st = player.state;
-  if (name === 'street') {
-    return { pos: [-44, 9, 44], look: [-14, 1, 14] };
+  if (name === 'police') {
+    s.hour = 21.5;
+    s.weather = 'rain';
+    s.heat = 55; // three stars
+    game.placePlayerAt(0, 28, Math.PI);
+    game.spawnPoliceAround(3, 2, 25);
+    game.spawnTrafficNear(2, 50);
+    for (let i = 0; i < 45; i += 1) game.update(STEP, {});
+    game.setShotCamera({ x: -9, y: 5.5, z: 14 }, { x: 0, y: 1.5, z: 28 });
+    return { scene: 'police' };
   }
-  // Driving shots: camera ahead of the car, high enough that traffic ahead of the
-  // player cannot fill the frame, looking back at it.
-  const car = world.player.state.inCar;
-  if (car) {
-    const fx = Math.sin(car.yaw), fz = Math.cos(car.yaw);
-    const cx = car.mesh.position.x, cz = car.mesh.position.z;
-    return {
-      pos: [cx + fx * 38, 15, cz + fz * 38],
-      look: [cx + fx * 6, 1.5, cz + fz * 6],
-    };
-  }
-  return { pos: [st.x - 20, 9, st.z - 20], look: [st.x, 1.5, st.z] };
-}
 
-export function shotInfo(name) {
-  return {
-    chase: 'Golden-hour chase — Rook in a sports car, Solmar PD closing in.',
-    street: 'Midday on foot in downtown Solmar — traffic, pedestrians, sun.',
-    mission: 'Dusk courier run for Mara — beacon lit, drop-off ahead.',
-    police: 'Night roadblock in the rain — wanted level four, no way through.',
-  }[name] || 'Solmar Heat';
+  // street (default): Rook walking a busy downtown crossing in the morning
+  s.hour = 10;
+  s.weather = 'clear';
+  game.placePlayerAt(24, 28, -0.6);
+  game.spawnTrafficNear(4, 45);
+  for (let i = 0; i < 30; i += 1) game.update(STEP, { forward: true });
+  game.setShotCamera(
+    { x: p.pos.x - 9, y: 4.5, z: p.pos.z - 10 },
+    { x: p.pos.x, y: 1.5, z: p.pos.z + 2 },
+  );
+  return { scene: 'street' };
 }

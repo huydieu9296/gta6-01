@@ -1,109 +1,154 @@
-// Pedestrians: sidewalk walkers who flee danger; witnesses raise the wanted level.
+// Solmar Heat — pedestrians: low-poly walkers who stroll the sidewalks, flee
+// when a gun goes off nearby, and remember what they saw. A witness who saw a
+// crime raises the wanted level — so think twice before shooting on a busy street.
 import * as THREE from 'three';
-import { CITY } from './config.js';
-import { clamp, dist2, makeRng } from './rng.js';
+import { PEDS } from './config.js';
+import { range, pick, chance } from './rng.js';
 
-const SHIRTS = [0xe07b39, 0x2e9e5b, 0xd8c832, 0x7a4a9e, 0x3ab8b8, 0xc0392b, 0xe8e8e8, 0x2e6fb8];
-const PANTS = [0x22262c, 0x3a4a6b, 0x5a3a2e, 0x4a4a4a];
-
-export function createPedestrians(scene, city, rng) {
-  const S = CITY.streets;
+/** A simple articulated figure: torso, head, arms and legs that swing while walking. */
+export function makeFigure(shirtColor, pantsColor, skinColor) {
   const group = new THREE.Group();
-  scene.add(group);
+  const shirt = new THREE.MeshLambertMaterial({ color: shirtColor });
+  const pants = new THREE.MeshLambertMaterial({ color: pantsColor });
+  const skin = new THREE.MeshLambertMaterial({ color: skinColor });
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.7, 0.3), shirt);
+  torso.position.y = 1.15;
+  group.add(torso);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.34, 0.34), skin);
+  head.position.y = 1.7;
+  group.add(head);
+  const hair = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.12, 0.36), new THREE.MeshLambertMaterial({ color: 0x201812 }));
+  hair.position.y = 1.9;
+  group.add(hair);
+  const armL = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.62, 0.16), shirt);
+  armL.position.set(-0.37, 1.2, 0);
+  group.add(armL);
+  const armR = armL.clone();
+  armR.position.x = 0.37;
+  group.add(armR);
+  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.8, 0.2), pants);
+  legL.position.set(-0.14, 0.4, 0);
+  group.add(legL);
+  const legR = legL.clone();
+  legR.position.x = 0.14;
+  group.add(legR);
+  return { group, parts: { armL, armR, legL, legR, head, torso } };
+}
+
+const SHIRTS = [0xc23b2e, 0x2e6fc2, 0xe0a92e, 0x3aa655, 0x8a5ec2, 0xe8e8e8, 0x222226, 0xff7a2e];
+const PANTS = [0x2a2d34, 0x3a4a6a, 0x5a4a3a, 0x222226];
+const SKINS = [0xe8b88a, 0xc98d5f, 0x8a5a3a, 0xf0c8a0];
+
+export function spawnPeds(scene, city, rng, count) {
   const peds = [];
-
-  function makePedMesh(shirt, pants) {
-    const g = new THREE.Group();
-    const mShirt = new THREE.MeshLambertMaterial({ color: shirt });
-    const mPants = new THREE.MeshLambertMaterial({ color: pants });
-    const mSkin = new THREE.MeshLambertMaterial({ color: 0xd9a066 });
-    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.7, 0.32), mShirt);
-    torso.position.y = 1.15; g.add(torso);
-    const head = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.36, 0.36), mSkin);
-    head.position.y = 1.72; g.add(head);
-    const legL = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.8, 0.2), mPants);
-    legL.position.set(-0.15, 0.4, 0); g.add(legL);
-    const legR = legL.clone(); legR.position.x = 0.15; g.add(legR);
-    const armL = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.62, 0.16), mShirt);
-    armL.position.set(-0.38, 1.15, 0); g.add(armL);
-    const armR = armL.clone(); armR.position.x = 0.38; g.add(armR);
-    g.userData = { legL, legR, armL, armR };
-    return g;
-  }
-
-  function spawnPed() {
-    const axis = rng.chance(0.5) ? 'x' : 'z';
-    const si = rng.int(0, S.length - 1);
-    const dir = rng.chance(0.5) ? 1 : -1;
-    const along = rng.range(-170, 170);
-    const side = rng.chance(0.5) ? 7.5 : -7.5;
-    const mesh = makePedMesh(rng.pick(SHIRTS), rng.pick(PANTS));
-    group.add(mesh);
+  for (let i = 0; i < count; i += 1) {
+    const { group, parts } = makeFigure(pick(rng, SHIRTS), pick(rng, PANTS), pick(rng, SKINS));
+    const pos = city.randomStreetPos(rng);
+    group.position.set(pos.x, 0, pos.z);
+    scene.add(group);
     peds.push({
-      mesh, axis, si, dir, side,
-      x: axis === 'x' ? along : S[si] + side,
-      z: axis === 'x' ? S[si] + side : along,
-      speed: rng.range(1.0, 1.8),
-      flee: 0, // seconds of fleeing left
-      dead: false,
-      walkPhase: rng.range(0, 6),
+      group, parts,
+      pos: group.position,
+      angle: range(rng, 0, Math.PI * 2),
+      speed: 0,
+      walkSpeed: range(rng, 1.2, 2.0),
+      state: 'walk',
+      panic: 0,
+      waypoint: null,
+      phase: range(rng, 0, Math.PI * 2),
+      witnessTimer: 0,
     });
   }
-  for (let i = 0; i < 24; i++) spawnPed();
+  return peds;
+}
 
-  return {
-    peds,
-    // Returns the nearest living ped within maxD of (x, z), or null.
-    nearest(x, z, maxD) {
-      let best = null, bd = maxD * maxD;
-      for (const p of peds) {
-        if (p.dead) continue;
-        const d = dist2(x, z, p.x, p.z);
-        if (d < bd) { bd = d; best = p; }
+function pickWaypoint(city, rng, ped) {
+  // walk the sidewalks: take a street point and push it to the sidewalk edge
+  const p = city.randomStreetPos(rng);
+  const off = 12 / 2 + 1.5;
+  const nearZStreet = Math.abs(p.z - city.nearestStreetCoord(p.z)) < 4;
+  if (nearZStreet) {
+    return new THREE.Vector3(p.x, 0, city.nearestStreetCoord(p.z) + (chance(rng, 0.5) ? off : -off));
+  }
+  return new THREE.Vector3(city.nearestStreetCoord(p.x) + (chance(rng, 0.5) ? off : -off), 0, p.z);
+}
+
+export function updatePeds(dt, city, peds, rng, danger) {
+  for (const ped of peds) {
+    ped.witnessTimer = Math.max(0, ped.witnessTimer - dt);
+    if (danger && danger.pos) {
+      const d = Math.hypot(ped.pos.x - danger.pos.x, ped.pos.z - danger.pos.z);
+      if (d < 14) {
+        ped.state = 'flee';
+        ped.panic = 3;
       }
-      return best;
-    },
-    scare(x, z, radius) {
-      for (const p of peds) {
-        if (p.dead) continue;
-        if (dist2(x, z, p.x, p.z) < radius * radius) p.flee = 3;
+    }
+    if (ped.panic > 0) ped.panic -= dt;
+    if (ped.state === 'flee' && ped.panic <= 0) ped.state = 'walk';
+    let speed = 0;
+    if (ped.state === 'flee') {
+      speed = PEDS.fleeSpeed;
+      if (danger && danger.pos) {
+        const dx = ped.pos.x - danger.pos.x;
+        const dz = ped.pos.z - danger.pos.z;
+        ped.angle = Math.atan2(dx, dz);
       }
-    },
-    kill(ped) {
-      ped.dead = true;
-      ped.mesh.visible = false;
-    },
-    step(dt, danger) {
-      // danger: {x, z} of the threat (player shooting / speeding car), or null.
-      for (const p of peds) {
-        if (p.dead) continue;
-        if (danger && dist2(danger.x, danger.z, p.x, p.z) < 30 * 30) p.flee = Math.max(p.flee, 1.5);
-        const speed = p.flee > 0 ? 4.2 : p.speed;
-        if (p.flee > 0) p.flee -= dt;
-        // Flee away from danger; otherwise walk along the sidewalk.
-        let dx = 0, dz = 0;
-        if (p.flee > 0 && danger) {
-          const d = Math.hypot(p.x - danger.x, p.z - danger.z) || 1;
-          dx = (p.x - danger.x) / d; dz = (p.z - danger.z) / d;
-        } else if (p.axis === 'x') { dx = p.dir; }
-        else { dz = p.dir; }
-        p.x += dx * speed * dt;
-        p.z += dz * speed * dt;
-        // Keep on the sidewalk strip; turn around at the city edge.
-        if (p.axis === 'x' && (p.x > 178 || p.x < -178)) { p.dir *= -1; p.x = clamp(p.x, -178, 178); }
-        if (p.axis === 'z' && (p.z > 178 || p.z < -178)) { p.dir *= -1; p.z = clamp(p.z, -178, 178); }
-        p.walkPhase += dt * speed * 2.2;
-        const swing = Math.sin(p.walkPhase) * 0.5;
-        p.mesh.userData.legL.rotation.x = swing;
-        p.mesh.userData.legR.rotation.x = -swing;
-        p.mesh.userData.armL.rotation.x = -swing * 0.7;
-        p.mesh.userData.armR.rotation.x = swing * 0.7;
-        p.mesh.position.set(p.x, 0, p.z);
-        const yaw = p.flee > 0 && danger
-          ? Math.atan2(p.x - danger.x, p.z - danger.z)
-          : (p.axis === 'x' ? (p.dir > 0 ? Math.PI / 2 : -Math.PI / 2) : (p.dir > 0 ? 0 : Math.PI));
-        p.mesh.rotation.y = yaw;
+    } else {
+      if (!ped.waypoint) ped.waypoint = pickWaypoint(city, rng, ped);
+      const dx = ped.waypoint.x - ped.pos.x;
+      const dz = ped.waypoint.z - ped.pos.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist < 1.5) {
+        ped.waypoint = null;
+        speed = 0;
+        if (chance(rng, 0.02)) ped.angle += range(rng, -1, 1);
+      } else {
+        ped.angle = Math.atan2(dx, dz);
+        speed = ped.walkSpeed;
       }
-    },
-  };
+    }
+    ped.speed = speed;
+    if (speed > 0) {
+      ped.pos.x += Math.sin(ped.angle) * speed * dt;
+      ped.pos.z += Math.cos(ped.angle) * speed * dt;
+      city.resolveCircle(ped.pos, 0.5);
+      ped.phase += dt * speed * 3.2;
+      const swing = Math.sin(ped.phase) * 0.55;
+      ped.parts.legL.rotation.x = swing;
+      ped.parts.legR.rotation.x = -swing;
+      ped.parts.armL.rotation.x = -swing * 0.8;
+      ped.parts.armR.rotation.x = swing * 0.8;
+    } else {
+      ped.parts.legL.rotation.x *= 0.9;
+      ped.parts.legR.rotation.x *= 0.9;
+      ped.parts.armL.rotation.x *= 0.9;
+      ped.parts.armR.rotation.x *= 0.9;
+    }
+    ped.group.rotation.y = ped.angle;
+  }
+}
+
+/** The nearest pedestrian within radius, or null. */
+export function nearestPed(peds, pos, radius) {
+  let best = null;
+  let bestD = radius;
+  for (const ped of peds) {
+    const d = Math.hypot(ped.pos.x - pos.x, ped.pos.z - pos.z);
+    if (d < bestD) {
+      bestD = d;
+      best = ped;
+    }
+  }
+  return best;
+}
+
+/** A witness saw a crime: returns true when this sighting should raise heat. */
+export function witnessSaw(ped, crimePos) {
+  if (ped.witnessTimer > 0) return false;
+  const d = Math.hypot(ped.pos.x - crimePos.x, ped.pos.z - crimePos.z);
+  if (d > PEDS.witnessRadius) return false;
+  ped.witnessTimer = PEDS.witnessCooldown;
+  ped.state = 'flee';
+  ped.panic = 3;
+  return true;
 }

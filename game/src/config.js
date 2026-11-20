@@ -1,95 +1,133 @@
-// Solmar Heat — every tuning number and colour in one place.
+// Solmar Heat — every tuning number lives here, so the whole game can be
+// balanced from one file. All distances are metres, all speeds m/s.
 export const CITY = {
-  pitch: 44, // distance between street centrelines
-  streets: [-154, -110, -66, -22, 22, 66, 110, 154], // street centrelines, x and z
-  roadHalf: 6, // half the road width
-  lane: 3, // lane offset from centreline (right-hand traffic)
-  blockHalf: 13, // half the buildable block width
-  extent: 176, // playable half-extent; beach starts west of -176
-  beachX: -196, // sand strip west edge
-  seaX: -232, // sea plane west edge
+  blocks: 7, // blocks per side of the grid
+  block: 44, // building block edge
+  road: 12, // road width
+  get pitch() { return this.block + this.road; },
+  get span() { return this.blocks * this.pitch; }, // 392 m across
+  get half() { return this.span / 2; }, // city runs -half .. +half
 };
 
 export const PLAYER = {
-  walk: 5.2,
-  run: 9.5,
-  accel: 42,
-  jump: 8.5,
-  radius: 0.7,
+  walkSpeed: 6,
+  runSpeed: 9.5,
+  accel: 40,
+  jumpSpeed: 8,
+  gravity: 22,
+  radius: 0.6,
   height: 1.8,
-  health: 100,
+  maxHealth: 100,
+  punchDamage: 18,
+  punchRange: 2.2,
+  punchCooldown: 0.45,
+  shotgunDamage: 55,
+  shotgunRange: 26,
+  shotgunCooldown: 0.9,
+  shotgunSpread: 0.06,
+  startAmmo: 12,
+  maxAmmo: 60,
 };
 
 export const CAR = {
   accel: 16,
-  brake: 34,
-  reverseAccel: 10,
+  brake: 30,
+  reverseMax: 12,
   maxSpeed: 36,
-  sportsMax: 48,
-  maxReverse: 11,
-  steer: 0.62,
-  wheelBase: 2.9,
-  grip: 7.5,
-  damage: 100, // hit points before it smokes and dies
+  sportsMaxSpeed: 46,
+  turnRate: 1.9, // rad/s at full lock, scaled by speed
+  grip: 6, // lateral damping
+  enterRadius: 3.2,
+  damagePerHit: 8,
+  maxDamage: 100,
+  repairRate: 25, // damage points per second at the pit stop
+  repairCostPerPoint: 2,
+};
+
+export const TRAFFIC = {
+  count: 14,
+  speed: 10, // city traffic cruises a little faster than a running Rook
+  minGap: 7,
+  spawnMargin: 20,
+};
+
+export const PEDS = {
+  count: 22,
+  walkSpeed: 1.6,
+  fleeSpeed: 4.5,
+  witnessRadius: 22,
+  witnessCooldown: 6,
 };
 
 export const WANTED = {
-  steal: 25,
-  shoot: 15, // one shotgun blast on a city street is a 1-star response
-  hitPed: 20,
-  hitCop: 30,
-  killPed: 35,
-  decay: 1.4, // heat lost per second while unseen
-  stars: [0, 15, 35, 55, 75, 90], // heat thresholds for stars 0..5
+  thresholds: [0, 15, 30, 50, 70, 90], // heat needed for stars 0..5
+  decayPerSec: 1.4,
+  decayDelay: 4, // seconds after last crime before decay starts
+  stealCar: 12,
+  shoot: 8,
+  hitPed: 15,
+  hitPolice: 25,
+  killPed: 30,
+  maxPoliceCars: [0, 1, 2, 3, 4, 5],
+  maxOfficers: [0, 1, 2, 3, 4, 6],
+  bustedHoldSec: 1.2,
+  bustedCashLoss: 0.2,
 };
 
 export const MONEY = {
   start: 250,
-  stashCash: 120,
-  courier: 220,
-  taxi: 160,
-  repair: 80,
-  safehouseBeach: 1500,
-  safehouseLoft: 3000,
-  bustedFine: 0.15, // fraction of cash lost when busted
+  courier: [220, 380],
+  taxi: [120, 220],
+  taxiTip: 60,
+  story: [300, 450, 800, 1500],
+  safehousePrice: 1500,
+  stashCash: [40, 120],
+  stashHealth: 30,
+  stashAmmo: 8,
 };
 
-export const TIME = {
-  start: 10.0, // hours, 10:00 on a new game
-  dayLength: 420, // real seconds per full 24h day
+export const DAY = {
+  lengthSec: 480, // one full day/night cycle
+  startHour: 9.5, // morning
+  nightStart: 19,
+  nightEnd: 6.5,
 };
 
 export const COLORS = {
-  skyDay: 0x87b8e8,
-  skyDusk: 0xe8965a,
-  skyNight: 0x0b1226,
-  fogDay: 0x9fc3e8,
-  fogNight: 0x0b1226,
-  sunDay: 0xfff2d8,
-  sunNight: 0x8fa8ff,
+  skyDay: 0x87b5e0,
+  skyDusk: 0xe08a5a,
+  skyNight: 0x0b1026,
+  sunDay: 0xfff2d0,
+  sunNight: 0x8fa3ff,
   road: 0x2e3138,
-  roadLine: 0xd8d8c8,
   sidewalk: 0x8a8d94,
-  sand: 0xd9c28a,
-  sea: 0x1e6f8e,
-  grass: 0x4d7a3a,
-  police: 0x1c4ed8,
+  sand: 0xd9c08a,
+  water: 0x2a6f8f,
+  grass: 0x4d7a45,
+  buildingPalette: [0x9a8f80, 0x7d8aa0, 0xa08a7d, 0x8a9a80, 0xb0a090, 0x6d7d8c],
+  windowLit: 0xffd27a,
+  windowDark: 0x2a3444,
+  carPalette: [0xc23b2e, 0x2e6fc2, 0xe0a92e, 0x3aa655, 0x8a8d94, 0x222226, 0xe8e8e8, 0x7a3ec2],
+  policeCar: 0x1a1d24,
+  policeLight: 0x2244ff,
+  taxiYellow: 0xf2c200,
+  marker: 0xffe14d,
+  safehouse: 0x3ec26a,
+  pitstop: 0xff7a2e,
 };
 
-export const PALETTE = {
-  hudBg: 'rgba(10,14,22,0.72)',
-  hudText: '#eef1f5',
-  hudMuted: '#9aa3b2',
-  hudGood: '#4ade80',
-  hudBad: '#f87171',
-  hudGold: '#f2c94c',
-  hudBlue: '#60a5fa',
+export const KEYS = {
+  forward: 'KeyW',
+  back: 'KeyS',
+  left: 'KeyA',
+  right: 'KeyD',
+  run: 'ShiftLeft',
+  jump: 'Space',
+  attack: 'Mouse0',
+  interact: 'KeyE',
+  weapon1: 'Digit1',
+  weapon2: 'Digit2',
+  pause: 'KeyP',
+  mute: 'KeyM',
+  handbrake: 'Space',
 };
-
-export const BUILDING = {
-  minH: 8,
-  maxH: 26,
-  downtownH: 52,
-};
-
-export const SAVE_KEY = 'solmar-heat.save.v1';

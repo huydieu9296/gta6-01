@@ -1,81 +1,98 @@
-// Keyboard + mouse input for Solmar Heat. Held keys are read every frame; one-shot
-// presses (interact, shoot, reload, phone, pause) are queued as flags and taken once.
-export const ACT = {
-  INTERACT: 1, // E
-  SHOOT: 2, // F or mouse click
-  RELOAD: 4, // R
-  PHONE: 8, // M
-  PAUSE: 16, // P or Escape
-  HORN: 32, // H
-};
+// Solmar Heat — keyboard + mouse state. WASD moves, mouse steers the camera
+// (pointer lock when available, click-drag as a fallback), and every action key
+// reports a one-frame "just pressed" edge so menus and prompts feel instant.
+export class Input {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.keys = new Set();
+    this.pressed = new Set();
+    this.mouseDX = 0;
+    this.mouseDY = 0;
+    this.mouseDown = false;
+    this.dragging = false;
+    this.locked = false;
+    this.enabled = true;
+    this._onKeyDown = (event) => {
+      if (!this.enabled) return;
+      if (event.code === 'Space') event.preventDefault();
+      if (!this.keys.has(event.code)) this.pressed.add(event.code);
+      this.keys.add(event.code);
+    };
+    this._onKeyUp = (event) => {
+      this.keys.delete(event.code);
+    };
+    this._onMouseDown = (event) => {
+      if (!this.enabled) return;
+      this.mouseDown = true;
+      if (event.button === 0) this.pressed.add('Mouse0');
+      if (this.canvas.requestPointerLock && !this.locked) {
+        try { this.canvas.requestPointerLock(); } catch { /* drag fallback */ }
+      }
+    };
+    this._onMouseUp = () => {
+      this.mouseDown = false;
+      this.dragging = false;
+    };
+    this._onMouseMove = (event) => {
+      if (!this.enabled) return;
+      if (this.locked) {
+        this.mouseDX += event.movementX || 0;
+        this.mouseDY += event.movementY || 0;
+      } else if (this.mouseDown) {
+        this.dragging = true;
+        this.mouseDX += event.movementX || 0;
+        this.mouseDY += event.movementY || 0;
+      }
+    };
+    this._onLockChange = () => {
+      this.locked = document.pointerLockElement === this.canvas;
+    };
+    this._onBlur = () => {
+      // alt-tab must never leave a key or a "just pressed" edge stuck on
+      this.keys.clear();
+      this.pressed.clear();
+      this.mouseDX = 0;
+      this.mouseDY = 0;
+      this.mouseDown = false;
+    };
+    window.addEventListener('keydown', this._onKeyDown);
+    window.addEventListener('keyup', this._onKeyUp);
+    window.addEventListener('blur', this._onBlur);
+    canvas.addEventListener('mousedown', this._onMouseDown);
+    window.addEventListener('mouseup', this._onMouseUp);
+    window.addEventListener('mousemove', this._onMouseMove);
+    document.addEventListener('pointerlockchange', this._onLockChange);
+  }
 
-const KEYMAP = {
-  KeyW: 'up', ArrowUp: 'up',
-  KeyS: 'down', ArrowDown: 'down',
-  KeyA: 'left', ArrowLeft: 'left',
-  KeyD: 'right', ArrowRight: 'right',
-  ShiftLeft: 'run', ShiftRight: 'run',
-  Space: 'jump',
-  KeyE: 'interact',
-  KeyF: 'shoot',
-  KeyR: 'reload',
-  KeyM: 'phone',
-  KeyP: 'pause', Escape: 'pause',
-  KeyH: 'horn',
-};
+  isDown(code) {
+    return this.keys.has(code);
+  }
 
-export function createInput(canvas) {
-  const held = { up: false, down: false, left: false, right: false, run: false, jump: false };
-  let actions = 0;
-  // Mouse-drag camera orbit: accumulated deltas, consumed by the camera each frame.
-  let dragX = 0, dragY = 0, dragging = false, lastX = 0, lastY = 0;
-  // A click only counts as a shot when the pointer barely moved: ending a camera
-  // drag must not fire the shotgun.
-  let downX = 0, downY = 0, moved = 0;
+  /** True only on the frame the key went down (consumed by endFrame). */
+  wasPressed(code) {
+    return this.pressed.has(code);
+  }
 
-  window.addEventListener('keydown', (e) => {
-    const name = KEYMAP[e.code];
-    if (!name) return;
-    if (name === 'interact' && !e.repeat) actions |= ACT.INTERACT;
-    else if (name === 'shoot' && !e.repeat) actions |= ACT.SHOOT;
-    else if (name === 'reload' && !e.repeat) actions |= ACT.RELOAD;
-    else if (name === 'phone' && !e.repeat) actions |= ACT.PHONE;
-    else if (name === 'pause' && !e.repeat) actions |= ACT.PAUSE;
-    else if (name === 'horn' && !e.repeat) actions |= ACT.HORN;
-    else if (held[name] !== undefined) held[name] = true;
-    if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
-  });
-  window.addEventListener('keyup', (e) => {
-    const name = KEYMAP[e.code];
-    if (name && held[name] !== undefined) held[name] = false;
-  });
-  window.addEventListener('blur', () => {
-    for (const k of Object.keys(held)) held[k] = false;
-    dragging = false;
-  });
-  canvas.addEventListener('pointerdown', (e) => {
-    dragging = true; lastX = e.clientX; lastY = e.clientY;
-    downX = e.clientX; downY = e.clientY; moved = 0;
-  });
-  window.addEventListener('pointermove', (e) => {
-    if (!dragging) return;
-    dragX += e.clientX - lastX; dragY += e.clientY - lastY;
-    moved = Math.max(moved, Math.hypot(e.clientX - downX, e.clientY - downY));
-    lastX = e.clientX; lastY = e.clientY;
-  });
-  window.addEventListener('pointerup', () => { dragging = false; });
-  canvas.addEventListener('click', () => { if (moved < 8) actions |= ACT.SHOOT; });
+  /** Mouse look delta since last frame, then cleared by endFrame. */
+  takeMouse() {
+    const dx = this.mouseDX;
+    const dy = this.mouseDY;
+    this.mouseDX = 0;
+    this.mouseDY = 0;
+    return { dx, dy };
+  }
 
-  return {
-    held,
-    takeActions() { const a = actions; actions = 0; return a; },
-    takeDrag() { const d = { x: dragX, y: dragY }; dragX = 0; dragY = 0; return d; },
-    // -1..1 steering / throttle axes for driving and walking.
-    axes() {
-      return {
-        fwd: (held.up ? 1 : 0) - (held.down ? 1 : 0),
-        strafe: (held.right ? 1 : 0) - (held.left ? 1 : 0),
-      };
-    },
-  };
+  endFrame() {
+    this.pressed.clear();
+  }
+
+  dispose() {
+    window.removeEventListener('keydown', this._onKeyDown);
+    window.removeEventListener('keyup', this._onKeyUp);
+    window.removeEventListener('blur', this._onBlur);
+    this.canvas.removeEventListener('mousedown', this._onMouseDown);
+    window.removeEventListener('mouseup', this._onMouseUp);
+    window.removeEventListener('mousemove', this._onMouseMove);
+    document.removeEventListener('pointerlockchange', this._onLockChange);
+  }
 }

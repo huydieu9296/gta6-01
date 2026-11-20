@@ -1,171 +1,252 @@
-// Missions: Mara's 4-part story arc plus repeatable courier and taxi side jobs.
-// Markers are 3D beacons; the phone (M) lists jobs and story progress.
+// Solmar Heat — missions: courier runs, taxi fares and a four-job story arc
+// from Mara, Rook's contact. A marker on the street starts a job; a beacon
+// and the minimap show where to go; the clock decides if the pay lands.
 import * as THREE from 'three';
 import { MONEY } from './config.js';
-import { dist2, makeRng } from './rng.js';
+import { range, intRange, pick } from './rng.js';
+import { makeFigure } from './pedestrians.js';
 
 const STORY = [
-  {
-    id: 's1', name: 'First Run', kind: 'courier',
-    brief: 'Mara: "Rook, package at the port. Take it to the hotel on Marina Ave. 100 seconds. Don\'t dawdle."',
-    pickup: { x: 132, z: 150 }, drop: { x: -22, z: -110 }, time: 100, pay: 300,
-  },
-  {
-    id: 's2', name: 'Cab Call', kind: 'taxi',
-    brief: 'Mara: "A fare\'s waiting by the park. Pick them up, drop them at the beach house. 90 seconds."',
-    pickup: { x: 22, z: 66 }, drop: { x: -160, z: 110 }, time: 90, pay: 250,
-  },
-  {
-    id: 's3', name: 'Hot Wheels', kind: 'steal',
-    brief: 'Mara: "A Comet GT is parked by the plaza. Bring it to the garage — and expect heat. $500 when it\'s mine."',
-    pickup: { x: 66, z: 22 }, drop: { x: 110, z: 66 }, time: 150, pay: 500,
-  },
-  {
-    id: 's4', name: 'Heat Wave', kind: 'chase',
-    brief: 'Mara: "Last one. Hit the three checkpoints across town, then lose the tail at the loft. 150 seconds."',
-    pickup: { x: 0, z: 0 },
-    checkpoints: [{ x: -110, z: -66 }, { x: 110, z: -110 }, { x: -66, z: 110 }],
-    drop: { x: 66, z: -22 }, time: 150, pay: 800,
-  },
+  { name: 'First Run', kind: 'courier', desc: 'Mara: a package at the port, downtown by the clock. Don\'t open it.', reward: 300, time: 150 },
+  { name: 'Cab Call', kind: 'taxi', desc: 'Mara: a fare at the beach wants uptown. Smooth ride, good tip.', reward: 450, time: 120 },
+  { name: 'Hot Package', kind: 'courier', desc: 'Mara: this one is warm. Cops will be looking. Get it to Harbor House.', reward: 800, time: 180, wanted: 2 },
+  { name: 'The Big Score', kind: 'courier', desc: 'Mara: the last one. Downtown to the port, and everyone will know. Make it count.', reward: 1500, time: 240, wanted: 3 },
 ];
 
-export function createMissions(scene, rng) {
-  const group = new THREE.Group();
-  scene.add(group);
-  let active = null; // {def, stage, timer, cpIndex, marker}
-  let sideCooldown = 0;
-  const beacons = [];
-
-  function makeBeacon(x, z, color) {
-    const geo = new THREE.CylinderGeometry(1.6, 1.6, 26, 10, 1, true);
-    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.28, side: THREE.DoubleSide, depthWrite: false });
-    const cyl = new THREE.Mesh(geo, mat);
-    cyl.position.set(x, 13, z);
-    const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.9),
-      new THREE.MeshBasicMaterial({ color }));
-    gem.position.set(x, 4.5, z);
-    group.add(cyl); group.add(gem);
-    const b = { cyl, gem, x, z };
-    beacons.push(b);
-    return b;
-  }
-  function clearBeacons() {
-    for (const b of beacons) { group.remove(b.cyl); group.remove(b.gem); }
-    beacons.length = 0;
-  }
-  function setMarker(x, z, color = 0x4ade80) {
-    clearBeacons();
-    return makeBeacon(x, z, color);
-  }
-
-  function startStory(index, onEvent) {
-    const def = STORY[index];
-    if (!def) return null;
-    active = { def, stage: 'pickup', timer: def.time, cpIndex: 0, onEvent };
-    setMarker(def.pickup.x, def.pickup.z, 0x4ade80);
-    return active;
-  }
-
-  function startSide(kind, px, pz) {
-    // Repeatable job: pickup near the player, drop across town.
-    const S = [-154, -110, -66, -22, 22, 66, 110, 154];
-    const drop = { x: S[rng.int(0, 7)], z: S[rng.int(0, 7)] };
-    const def = {
-      id: 'side-' + kind, name: kind === 'taxi' ? 'Taxi Fare' : 'Courier Run', kind,
-      brief: kind === 'taxi' ? 'Fare waiting nearby — take them across town.' : 'Package waiting nearby — deliver it across town.',
-      pickup: { x: px, z: pz }, drop,
-      time: 120, pay: kind === 'taxi' ? MONEY.taxi : MONEY.courier,
-    };
-    active = { def, stage: 'pickup', timer: def.time, cpIndex: 0 };
-    setMarker(def.pickup.x, def.pickup.z, 0xf2c94c);
-    return active;
-  }
-
-  function fail(reason) {
-    const a = active;
-    active = null;
-    clearBeacons();
-    return a ? { ...a, reason } : null;
-  }
-  function complete() {
-    const a = active;
-    active = null;
-    clearBeacons();
-    return a;
-  }
-
+export function createMissions(scene, city, rng) {
+  const beaconMat = new THREE.MeshBasicMaterial({ color: 0xffe14d, transparent: true, opacity: 0.75 });
+  const beacon = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 30, 12, 1, true), beaconMat);
+  beacon.visible = false;
+  scene.add(beacon);
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0xffe14d, transparent: true, opacity: 0.6, side: THREE.DoubleSide });
+  const ring = new THREE.Mesh(new THREE.RingGeometry(2.2, 3, 24), ringMat);
+  ring.rotation.x = -Math.PI / 2;
+  ring.visible = false;
+  scene.add(ring);
   return {
-    get active() { return active; },
-    get storyCount() { return STORY.length; },
-    storyDef(i) { return STORY[i]; },
-    startStory,
-    startSide,
-    fail,
-    complete,
-    // Offer a side job near the player (called when idle, throttled).
-    offerSide(px, pz) {
-      if (active || sideCooldown > 0) return null;
-      sideCooldown = 25;
-      return startSide(rng.chance(0.5) ? 'taxi' : 'courier', px + 12, pz + 8);
-    },
-    // Advance the active mission. Returns an event object when something happens.
-    step(dt, px, pz, inCar, hasPackage) {
-      if (sideCooldown > 0) sideCooldown -= dt;
-      if (!active) return null;
-      active.timer -= dt;
-      if (active.timer <= 0) return { type: 'failed', reason: 'Out of time.' };
-      const def = active.def;
-      const gem = beacons[0] && beacons[0].gem;
-      if (gem) { gem.rotation.y += dt * 2; gem.position.y = 4.5 + Math.sin(performance.now() / 300) * 0.4; }
-      if (active.stage === 'pickup') {
-        if (dist2(px, pz, def.pickup.x, def.pickup.z) < 49) {
-          if (def.kind === 'steal') {
-            // The sports car must be entered; main.js flips stage to 'deliver' on entry.
-            return { type: 'atPickup' };
-          }
-          active.stage = 'deliver';
-          setMarker(def.drop.x, def.drop.z, 0x4ade80);
-          return { type: 'pickedUp', text: def.kind === 'taxi' ? 'Passenger aboard — drive to the marker.' : 'Package collected — deliver it to the marker.' };
-        }
-        return null;
-      }
-      if (def.kind === 'chase' && active.stage === 'deliver') {
-        const cp = def.checkpoints[active.cpIndex];
-        if (cp && dist2(px, pz, cp.x, cp.z) < 64) {
-          active.cpIndex++;
-          if (active.cpIndex >= def.checkpoints.length) {
-            setMarker(def.drop.x, def.drop.z, 0x4ade80);
-            return { type: 'checkpointsDone', text: 'All checkpoints hit — lose the tail at the loft.' };
-          }
-          const next = def.checkpoints[active.cpIndex];
-          setMarker(next.x, next.z, 0x4ade80);
-          return { type: 'checkpoint', text: `Checkpoint ${active.cpIndex + 1} of ${def.checkpoints.length}` };
-        }
-        return null;
-      }
-      if (active.stage === 'deliver') {
-        if (dist2(px, pz, def.drop.x, def.drop.z) < 64) {
-          const done = complete();
-          return { type: 'done', pay: done.def.pay, name: done.def.name };
-        }
-      }
-      return null;
-    },
-    // For the steal mission: called when the player enters the target car.
-    markStolen() {
-      if (active && active.def.kind === 'steal' && active.stage === 'pickup') {
-        active.stage = 'deliver';
-        setMarker(active.def.drop.x, active.def.drop.z, 0x4ade80);
-        return true;
-      }
-      return false;
-    },
-    markerPos() {
-      if (!active) return null;
-      const def = active.def;
-      if (active.stage === 'pickup') return def.pickup;
-      if (def.kind === 'chase' && active.cpIndex < def.checkpoints.length) return def.checkpoints[active.cpIndex];
-      return def.drop;
-    },
+    scene, city, rng,
+    beacon, ring,
+    storyIndex: 0,
+    storyDone: false,
+    active: null,
+    side: [],
+    sideCooldown: 0,
+    storyCooldown: 8,
+    passenger: null,
+    completed: 0,
+    earned: 0,
   };
 }
+
+function streetPoint(city, rng) {
+  const p = city.randomStreetPos(rng);
+  return new THREE.Vector3(p.x, 0, p.z);
+}
+
+function spawnSide(missions) {
+  const { city, rng } = missions;
+  const kind = pick(rng, ['courier', 'courier', 'taxi']);
+  if (kind === 'courier') {
+    missions.side.push({
+      kind: 'courier',
+      name: 'Courier Run',
+      desc: 'Pick up the package, deliver it before the clock runs out.',
+      pickup: streetPoint(city, rng),
+      dropoff: streetPoint(city, rng),
+      reward: intRange(rng, MONEY.courier[0], MONEY.courier[1]),
+      time: 150,
+    });
+  } else {
+    missions.side.push({
+      kind: 'taxi',
+      name: 'Taxi Fare',
+      desc: 'Pick up the passenger and drive them to the marker.',
+      pickup: streetPoint(city, rng),
+      dropoff: streetPoint(city, rng),
+      reward: intRange(rng, MONEY.taxi[0], MONEY.taxi[1]),
+      time: 120,
+    });
+  }
+}
+
+function startMission(missions, def, isStory) {
+  const m = {
+    kind: def.kind,
+    name: def.name,
+    desc: def.desc,
+    stage: 'pickup',
+    pickup: def.pickup.clone(),
+    dropoff: def.dropoff.clone(),
+    target: def.pickup.clone(),
+    timeLeft: def.time,
+    reward: def.reward,
+    story: !!isStory,
+    wanted: def.wanted || 0,
+    tip: 0,
+  };
+  missions.active = m;
+  if (m.kind === 'taxi') {
+    const { group, parts } = makeFigure(0xe0a92e, 0x2a2d34, 0xc98d5f);
+    group.position.copy(m.pickup);
+    missions.scene.add(group);
+    missions.passenger = { group, parts, pos: group.position };
+  }
+  return m;
+}
+
+export function beginSideMission(missions, def) {
+  const m = {
+    kind: def.kind,
+    name: def.name,
+    desc: def.desc,
+    stage: 'pickup',
+    pickup: def.pickup.clone(),
+    dropoff: def.dropoff.clone(),
+    target: def.pickup.clone(),
+    timeLeft: def.time,
+    reward: def.reward,
+    story: false,
+    wanted: 0,
+    tip: 0,
+    sideDef: def,
+  };
+  missions.active = m;
+  if (m.kind === 'taxi') {
+    const { group } = makeFigure(0xe0a92e, 0x2a2d34, 0xc98d5f);
+    group.position.copy(m.pickup);
+    missions.scene.add(group);
+    missions.passenger = { group, pos: group.position };
+  }
+  return m;
+}
+
+export function startStoryMission(missions) {
+  const def = STORY[missions.storyIndex];
+  if (!def) return null;
+  const { city, rng } = missions;
+  const pickup = def.name === 'Hot Package' ? new THREE.Vector3(-city.half + 40, 0, range(rng, -40, 40)) : streetPoint(city, rng);
+  const dropoff = def.name === 'Hot Package'
+    ? missions.city.safehouses[0].pos.clone()
+    : def.name === 'The Big Score'
+      ? new THREE.Vector3(city.half + 20, 0, 0)
+      : streetPoint(city, rng);
+  return startMission(missions, { ...def, pickup, dropoff }, true);
+}
+
+/** The nearest job marker the player can start, within radius. */
+export function nearestMarker(missions, pos, radius) {
+  let best = null;
+  let bestD = radius;
+  const consider = (m, isStory) => {
+    const p = m.pickup || m.pos;
+    const d = Math.hypot(p.x - pos.x, p.z - pos.z);
+    if (d < bestD) {
+      bestD = d;
+      best = { def: m, story: isStory };
+    }
+  };
+  for (const m of missions.side) consider(m, false);
+  if (missions.storyIndex < STORY.length && missions.storyCooldown <= 0) {
+    const def = STORY[missions.storyIndex];
+    const pos0 = missions.storyPickup || null;
+    if (pos0) consider({ ...def, pickup: pos0 }, true);
+  }
+  return best;
+}
+
+export function updateMissions(dt, missions, playerPos, hooks) {
+  const events = [];
+  missions.sideCooldown -= dt;
+  missions.storyCooldown -= dt;
+  if (missions.side.length < 2 && missions.sideCooldown <= 0) {
+    spawnSide(missions);
+    missions.sideCooldown = 25;
+  }
+  // story pickup point: fixed per story job, chosen once when it unlocks
+  if (missions.storyIndex < STORY.length && missions.storyCooldown <= 0 && !missions.storyPickup) {
+    missions.storyPickup = streetPoint(missions.city, missions.rng);
+  }
+
+  const m = missions.active;
+  if (m) {
+    m.timeLeft -= dt;
+    if (m.timeLeft <= 0) {
+      events.push({ type: 'fail', mission: m, reason: 'Out of time.' });
+      missions.active = null;
+      clearPassenger(missions);
+    } else {
+      const d = Math.hypot(m.target.x - playerPos.x, m.target.z - playerPos.z);
+      if (d < 4) {
+        if (m.stage === 'pickup') {
+          m.stage = 'dropoff';
+          m.target = m.dropoff.clone();
+          m.timeLeft += 30;
+          if (m.wanted > 0 && hooks.setWanted) hooks.setWanted(m.wanted);
+          events.push({ type: 'stage', mission: m, text: m.kind === 'taxi' ? 'Passenger aboard — drive to the marker.' : 'Package collected — deliver it.' });
+          if (m.kind === 'taxi' && missions.passenger) {
+            missions.scene.remove(missions.passenger.group);
+            missions.passenger = null;
+          }
+        } else {
+          let reward = m.reward;
+          if (m.kind === 'taxi' && m.timeLeft > 40) {
+            m.tip = MONEY.taxiTip;
+            reward += m.tip;
+          }
+          missions.completed += 1;
+          missions.earned += reward;
+          if (m.story) {
+            missions.storyIndex += 1;
+            missions.storyPickup = null;
+            missions.storyCooldown = 10;
+            if (missions.storyIndex >= STORY.length) missions.storyDone = true;
+          } else {
+            const i = missions.side.findIndex((s) => s === m.sideDef);
+            if (i >= 0) missions.side.splice(i, 1);
+          }
+          events.push({ type: 'complete', mission: m, reward });
+          missions.active = null;
+        }
+      }
+    }
+  }
+
+  // beacon + ring follow the current objective
+  const target = m ? m.target : null;
+  if (target) {
+    missions.beacon.visible = true;
+    missions.ring.visible = true;
+    missions.beacon.position.set(target.x, 15, target.z);
+    missions.ring.position.set(target.x, 0.15, target.z);
+    const s = 1 + Math.sin(performance.now() / 300) * 0.15;
+    missions.ring.scale.set(s, s, 1);
+  } else {
+    missions.beacon.visible = false;
+    missions.ring.visible = false;
+  }
+  return events;
+}
+
+function clearPassenger(missions) {
+  if (missions.passenger) {
+    missions.scene.remove(missions.passenger.group);
+    missions.passenger = null;
+  }
+}
+
+/** The marker the player should see when no job is active (nearest side job). */
+export function idleMarker(missions, playerPos) {
+  if (missions.active) return null;
+  let best = null;
+  let bestD = Infinity;
+  for (const m of missions.side) {
+    const d = Math.hypot(m.pickup.x - playerPos.x, m.pickup.z - playerPos.z);
+    if (d < bestD) {
+      bestD = d;
+      best = m;
+    }
+  }
+  return best;
+}
+
+export { STORY };
